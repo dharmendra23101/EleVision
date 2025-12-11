@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>Elephant Migration Tracker</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { height: 100vh; width: 100%; }
+        
+        /* Simple legend style */
+        .info-legend {
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+    // 1. Initialize Map
+    const map = L.map('map').setView([21.20, 81.30], 9);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: "© OpenStreetMap contributors"
+    }).addTo(map);
+
+    // ==========================================
+    // 2. INPUT DATA (Lat, Long, Time)
+    // ==========================================
+    const rawSightings = [
+        // Elephant A (Northbound)
+        { id: 'p1', lat: 21.20, lng: 81.30, time: '2023-10-01T08:00:00' },
+        { id: 'p2', lat: 21.25, lng: 81.30, time: '2023-10-01T09:00:00' },
+        
+        // Elephant B (Eastbound) - distinct location
+        { id: 'p3', lat: 21.10, lng: 81.40, time: '2023-10-01T08:30:00' },
+        
+        // Elephant A continues
+        { id: 'p4', lat: 21.35, lng: 81.31, time: '2023-10-01T10:30:00' }, 
+
+        // Elephant B continues
+        { id: 'p5', lat: 21.10, lng: 81.55, time: '2023-10-01T09:30:00' },
+        
+        // IMPOSSIBLE JUMP (Noise or 3rd Elephant)
+        { id: 'p6', lat: 22.00, lng: 82.00, time: '2023-10-01T10:00:00' }
+    ];
+
+    const MAX_SPEED_KMH = 25;
+
+    // ==========================================
+    // 3. HELPER FUNCTIONS (Math)
+    // ==========================================
+
+    function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
+        const R = 6371;
+        const dLat = deg2rad(lat2 - lat1);
+        const dLon = deg2rad(lon2 - lon1);
+        const a = 
+            Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * Math.sin(dLon/2) * Math.sin(dLon/2); 
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+        const d = R * c;
+        return d;
+    }
+
+    function deg2rad(deg) {
+        return deg * (Math.PI/180);
+    }
+
+    function getRandomColor() {
+        const letters = '0123456789ABCDEF';
+        let color = '#';
+        for (let i = 0; i < 6; i++) {
+            color += letters[Math.floor(Math.random() * 16)];
+        }
+        return color;
+    }
+
+    // Function to create arrow SVG
+    function createArrowIcon(color, rotation) {
+        const svgIcon = `
+            <svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="transform: rotate(${rotation}deg)">
+                <path d="M12 2 L12 18 M12 18 L7 13 M12 18 L17 13" 
+                      stroke="${color}" 
+                      stroke-width="2" 
+                      fill="none" 
+                      stroke-linecap="round" 
+                      stroke-linejoin="round"/>
+            </svg>
+        `;
+        return L.divIcon({
+            html: svgIcon,
+            className: 'arrow-icon',
+            iconSize: [24, 24],
+            iconAnchor: [12, 12]
+        });
+    }
+
+    // Calculate bearing between two points
+    function calculateBearing(lat1, lng1, lat2, lng2) {
+        const dLon = deg2rad(lng2 - lng1);
+        const y = Math.sin(dLon) * Math.cos(deg2rad(lat2));
+        const x = Math.cos(deg2rad(lat1)) * Math.sin(deg2rad(lat2)) -
+                  Math.sin(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * Math.cos(dLon);
+        const bearing = Math.atan2(y, x);
+        return (bearing * 180 / Math.PI + 360) % 360;
+    }
+
+    // ==========================================
+    // 4. CORE LOGIC: GROUPING ELEPHANTS
+    // ==========================================
+
+    function processElephantPaths(data) {
+        data.sort((a, b) => new Date(a.time) - new Date(b.time));
+
+        let elephantPaths = [];
+
+        data.forEach(point => {
+            const pointTime = new Date(point.time);
+            let addedToPath = false;
+            let bestPathIndex = -1;
+            let lowestSpeedDiff = Infinity;
+
+            for (let i = 0; i < elephantPaths.length; i++) {
+                let currentPath = elephantPaths[i];
+                let lastPoint = currentPath[currentPath.length - 1];
+                let lastTime = new Date(lastPoint.time);
+
+                let timeDiffHours = (pointTime - lastTime) / 1000 / 60 / 60;
+
+                if (timeDiffHours > 0) {
+                    let distKm = getDistanceFromLatLonInKm(lastPoint.lat, lastPoint.lng, point.lat, point.lng);
+                    let requiredSpeed = distKm / timeDiffHours;
+
+                    if (requiredSpeed <= MAX_SPEED_KMH) {
+                        if (requiredSpeed < lowestSpeedDiff) {
+                            lowestSpeedDiff = requiredSpeed;
+                            bestPathIndex = i;
+                        }
+                    }
+                }
+            }
+
+            if (bestPathIndex > -1) {
+                elephantPaths[bestPathIndex].push(point);
+            } else {
+                elephantPaths.push([point]);
+            }
+        });
+
+        return elephantPaths;
+    }
+
+    // ==========================================
+    // 5. EXECUTION & RENDERING
+    // ==========================================
+
+    const calculatedPaths = processElephantPaths(rawSightings);
+    
+    const featureGroup = L.featureGroup().addTo(map);
+
+    calculatedPaths.forEach((path, index) => {
+        const color = getRandomColor();
+        const latLngs = path.map(p => [p.lat, p.lng]);
+        const elephantName = `Elephant Group ${index + 1}`;
+
+        // Draw the Path Line
+        if (path.length > 1) {
+            L.polyline(latLngs, {
+                color: color,
+                weight: 4,
+                opacity: 0.8,
+                dashArray: '10, 10'
+            }).addTo(featureGroup).bindPopup(`${elephantName} Path`);
+
+            // Add arrows between consecutive points
+            for (let i = 0; i < path.length - 1; i++) {
+                const fromPoint = path[i];
+                const toPoint = path[i + 1];
+                
+                // Calculate midpoint for arrow placement
+                const midLat = (fromPoint.lat + toPoint.lat) / 2;
+                const midLng = (fromPoint.lng + toPoint.lng) / 2;
+                
+                // Calculate bearing for arrow rotation
+                const bearing = calculateBearing(fromPoint.lat, fromPoint.lng, toPoint.lat, toPoint.lng);
+                
+                // Add arrow marker at midpoint
+                L.marker([midLat, midLng], {
+                    icon: createArrowIcon(color, bearing),
+                    interactive: false
+                }).addTo(featureGroup);
+            }
+        }
+
+        // Draw Markers for each point
+        path.forEach(p => {
+            L.circleMarker([p.lat, p.lng], {
+                radius: 6,
+                fillColor: color,
+                color: "#000",
+                weight: 1,
+                opacity: 1,
+                fillOpacity: 0.8
+            }).addTo(featureGroup)
+            .bindPopup(`
+                <b>${elephantName}</b><br>
+                Time: ${new Date(p.time).toLocaleTimeString()}<br>
+                Lat: ${p.lat}<br>Long: ${p.lng}
+            `);
+        });
+    });
+
+    // Fit map to show all elephants
+    if(calculatedPaths.length > 0) {
+        map.fitBounds(featureGroup.getBounds(), { padding: [50, 50] });
+    }
+
+    // Add a simple legend to bottom left
+    const legend = L.control({position: 'bottomleft'});
+    legend.onAdd = function (map) {
+        const div = L.DomUtil.create('div', 'info-legend');
+        div.innerHTML += "<h4>Monitoring</h4>";
+        div.innerHTML += `<b>Detected:</b> ${calculatedPaths.length} unique paths<br>`;
+        div.innerHTML += `<b>Max Speed Logic:</b> ${MAX_SPEED_KMH} km/h`;
+        return div;
+    };
+    legend.addTo(map);
+
+</script>
+
+</body>
+</html>

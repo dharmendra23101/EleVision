@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Reverse Geocode (Tehsil Detection Enhanced)</title>
+    <style>
+        body { font-family: Arial; max-width: 600px; margin: 40px auto; }
+        input { padding: 8px; width: 250px; }
+        button { padding: 10px; margin-top: 10px; }
+        pre { background: #eee; padding: 12px; margin-top: 20px; border-radius: 6px; }
+    </style>
+</head>
+<body>
+
+<h2>Most Accurate Tehsil Detection (OpenCage)</h2>
+
+<label>Latitude: <input id="lat" value="20.790049"></label>
+<label>Longitude: <input id="lon" value="81.716180"></label>
+<button onclick="lookup()">Get Location</button>
+
+<pre id="out">Waiting...</pre>
+
+<script>
+const API_KEY = "7536ce94d432414b9980a08ade794c31";
+
+// Words that indicate Tehsil
+const tehsilKeywords = ["tehsil", "tahsil", "taluka", "taluk", "mandal", "block", "subdistrict", "sub-district"];
+
+// Function to clean the tehsil name
+function cleanTehsil(text) {
+    if (!text) return null;
+    let cleaned = text;
+
+    tehsilKeywords.forEach(word => {
+        cleaned = cleaned.replace(new RegExp(word, "ig"), "");
+    });
+
+    return cleaned.trim();
+}
+
+// MASTER TEHSIL DETECTOR
+function detectTehsil(components) {
+
+    // Check all fields of components
+    for (let key in components) {
+        if (typeof components[key] === "string") {
+            const value = components[key].toLowerCase();
+
+            // If ANY field contains tehsil-like words
+            for (let w of tehsilKeywords) {
+                if (value.includes(w)) {
+                    return cleanTehsil(components[key]);
+                }
+            }
+        }
+    }
+
+    return null;
+}
+
+async function lookup() {
+    const lat = document.getElementById("lat").value;
+    const lon = document.getElementById("lon").value;
+    const out = document.getElementById("out");
+
+    const url = `https://api.opencagedata.com/geocode/v1/json?q=${lat}+${lon}&key=${API_KEY}&language=en`;
+
+    try {
+        const r = await fetch(url);
+        const j = await r.json();
+
+        if (!j.results || j.results.length === 0) {
+            out.textContent = "No results found.";
+            return;
+        }
+
+        const c = j.results[0].components;
+
+        let tehsil = detectTehsil(c);
+        if (!tehsil) tehsil = "(not found)";
+
+        const result = {
+            state: c.state || "(not found)",
+            district: c.state_district || c.county || "(not found)",
+            tehsil: tehsil,
+            locality: c.village || c.town || c.city || c.hamlet || "(not found)",
+            pincode: c.postcode || "(not found)"
+        };
+
+        out.textContent = JSON.stringify(result, null, 2);
+
+    } catch (err) {
+        out.textContent = "ERROR: " + err;
+    }
+}
+</script>
+
+</body>
+</html>
